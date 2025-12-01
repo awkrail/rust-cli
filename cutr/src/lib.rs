@@ -1,7 +1,13 @@
 use crate::Extract::*;
 use clap::{Arg, App};
-use std::{error::Error, ops::Range};
 use regex::Regex;
+use std::{
+    error::Error,
+    fs::File,
+    io::{self, BufRead, BufReader},
+    num::NonZeroUsize,
+    ops::Range,
+};
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
 type PositionList = Vec<Range<usize>>;
@@ -21,42 +27,77 @@ pub struct Config {
 }
 
 pub fn run(config: Config) -> MyResult<()> {
-    println!("{:#?}", &config);
+    for filename in &config.files {
+        match open(filename) {
+            Err(err) => eprintln!("{}: {}", filename, err),
+            Ok(_) => println!("Opened {}", filename),
+        }
+    }
     Ok(())
 }
 
-fn parse_pos(range: &str) -> MyResult<PositionList> {
-    let mut ranges : PositionList = vec![];
-    for part in range.split(',') {
-        let re_hyphen = Regex::new(r"^([0-9]+)-([0-9]+)$").unwrap();
-        let re_number = Regex::new(r"^[0-9]+$").unwrap();
+fn parse_index(input: &str) -> Result<usize, String> {
+    let value_error = || format!("illegal list value: \"{}\"", input);
+    input
+        .starts_with('+')
+        .then(|| Err(value_error()))
+        .unwrap_or_else(|| {
+            input
+                .parse::<NonZeroUsize>()
+                .map(|n| usize::from(n) - 1) // convert Ok's content into usize
+                .map_err(|_| value_error()) // convert Err's content into String
+        })
+}
 
-        if let Some(cap) = re_hyphen.captures(part) {
-            let left : i32 = cap[1].parse::<i32>().unwrap() - 1;
-            let right : i32 = cap[2].parse::<i32>().unwrap();
-            let left = usize::try_from(left)?;
-            let right = usize::try_from(right)?;
-            if left >= right {
-                return Err(format!("First number in range ({}) must be lower than second number ({})", left, right).into());
-            }
-            let r = left..right;
-            ranges.push(r);
-            continue;
-        }
+fn extract_chars(line: &str, char_pos: &[Range<usize>]) -> String {
+    let chars : Vec<char> = line.chars().collect();
+    char_pos
+        .iter()
+        .flat_map(|range| {
+            let Range { start, end } = *range;
+            chars[start..end].iter()
+        })
+        .collect()
+}
 
-        if let Some(cap) = re_number.find(part) {
-            let n: usize = cap.as_str().parse().map_err(|_| "The number should be larger than 0")?;
-            if n == 0 {
-                return Err("The number should be larger than 0".into());
-            }
-            continue;
-        }
+fn extract_bytes(line: &str, byte_pos: &[Range<usize>]) -> String {
+    let bytes: Vec<u8> = line.bytes().collect();
+    let byte_pos = byte_pos
+        .iter()
+        .flat_map(|range| {
+            let Range { start, end } = *range;
+            bytes[start..end].iter().copied()
+        })
+        .collect::<Vec<u8>>();
+    String::from_utf8_lossy(&byte_pos).to_string()
+}
 
-        // illegal match
-        return Err(format!("illegal list value: \"{}\"", part).into());
+fn open(filename: &str) -> MyResult<Box<dyn BufRead>> {
+    match filename {
+        "-" => Ok(Box::new(BufReader::new(io::stdin()))),
+        _ => Ok(Box::new(BufReader::new(File::open(filename)?))),
     }
+}
 
-    Ok(ranges)
+fn parse_pos(range: &str) -> MyResult<PositionList> {
+    let range_re = Regex::new(r"^(\d+)-(\d+)$").unwrap();
+    range
+        .split(',')
+        .into_iter()
+        .map(|val| {
+            parse_index(val).map(|n| n..n+1).or_else(|e| {
+                range_re.captures(val).ok_or(e).and_then(|captures| {
+                    let n1 = parse_index(&captures[1])?;
+                    let n2 = parse_index(&captures[2])?;
+                    if n1 >= n2 {
+                        return Err(format!("First number in range ({}) must be lower than second number ({})", n1 + 1, n2 + 1));
+                    }
+                    Ok(n1..n2+1)
+                })
+            })
+        })
+        .collect::<Result<_, _>>()
+        .map_err(From::from)
 }
 
 pub fn get_args() -> MyResult<Config> {
@@ -76,6 +117,7 @@ pub fn get_args() -> MyResult<Config> {
                 .short("b")
                 .long("bytes")
                 .takes_value(true)
+                .conflicts_with_all(&["chars", "fields"])
         )
         .arg(
             Arg::with_name("chars")
@@ -83,7 +125,7 @@ pub fn get_args() -> MyResult<Config> {
                 .short("c")
                 .long("chars")
                 .takes_value(true)
-                .conflicts_with("bytes")
+                .conflicts_with_all(&["bytes", "fields"])
         )
         .arg(
             Arg::with_name("delim")
@@ -99,8 +141,7 @@ pub fn get_args() -> MyResult<Config> {
                 .short("f")
                 .long("fields")
                 .takes_value(true)
-                .conflicts_with("chars")
-                .conflicts_with("bytes")
+                .conflicts_with_all(&["chars", "bytes"])
         )
         .get_matches();
 
