@@ -8,13 +8,14 @@ use std::{
     num::NonZeroUsize,
     ops::Range,
 };
+use csv::{StringRecord, WriterBuilder, ReaderBuilder};
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
 type PositionList = Vec<Range<usize>>;
 
 #[derive(Debug)]
 pub enum Extract {
-    Field(PositionList),
+    Fields(PositionList),
     Bytes(PositionList),
     Chars(PositionList),
 }
@@ -30,7 +31,33 @@ pub fn run(config: Config) -> MyResult<()> {
     for filename in &config.files {
         match open(filename) {
             Err(err) => eprintln!("{}: {}", filename, err),
-            Ok(_) => println!("Opened {}", filename),
+            Ok(file) => match &config.extract {
+                Fields(field_pos) => {
+                    let mut reader = ReaderBuilder::new()
+                        .delimiter(config.delimiter)
+                        .has_headers(false)
+                        .from_reader(file);
+
+                    let mut wtr = WriterBuilder::new()
+                        .delimiter(config.delimiter)
+                        .from_writer(io::stdout());
+
+                    for record in reader.records() {
+                        let record = record?;
+                        wtr.write_record(extract_fields(&record, field_pos))?;
+                    }
+                }
+                Bytes(bytes_pos) => {
+                    for line in file.lines() {
+                        println!("{}", extract_bytes(&line?, bytes_pos));
+                    }
+                }
+                Chars(chars_pos) => {
+                    for line in file.lines() {
+                        println!("{}", extract_chars(&line?, chars_pos));
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -53,23 +80,28 @@ fn extract_chars(line: &str, char_pos: &[Range<usize>]) -> String {
     let chars : Vec<char> = line.chars().collect();
     char_pos
         .iter()
-        .flat_map(|range| {
-            let Range { start, end } = *range;
-            chars[start..end].iter()
-        })
+        .cloned()
+        .flat_map(|range| range.filter_map(|i| chars.get(i)))
         .collect()
 }
 
 fn extract_bytes(line: &str, byte_pos: &[Range<usize>]) -> String {
     let bytes: Vec<u8> = line.bytes().collect();
-    let byte_pos = byte_pos
+    let selected: Vec<_> = byte_pos
         .iter()
-        .flat_map(|range| {
-            let Range { start, end } = *range;
-            bytes[start..end].iter().copied()
-        })
-        .collect::<Vec<u8>>();
-    String::from_utf8_lossy(&byte_pos).to_string()
+        .cloned()
+        .flat_map(|range| range.filter_map(|i| bytes.get(i)).copied())
+        .collect();
+    String::from_utf8_lossy(&selected).into_owned()
+}
+
+fn extract_fields(record: &StringRecord, field_pos: &[Range<usize>]) -> Vec<String> {
+    field_pos
+        .iter()
+        .cloned()
+        .flat_map(|range| range.filter_map(|i| record.get(i)))
+        .map(String::from)
+        .collect()
 }
 
 fn open(filename: &str) -> MyResult<Box<dyn BufRead>> {
@@ -161,7 +193,7 @@ pub fn get_args() -> MyResult<Config> {
     } else if let Some(p) = chars {
         Extract::Chars(p)
     } else if let Some(p) = fields {
-        Extract::Field(p)
+        Extract::Fields(p)
     } else {
         return Err("the following required arguments were not provided:\n  \
         <--fields <FIELDS>|--bytes <BYTES>|--chars <CHARS>>".into());
