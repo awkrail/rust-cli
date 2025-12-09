@@ -52,13 +52,13 @@ pub fn get_args() -> MyResult<Config> {
         .get_matches();
     
     let pattern = matches.value_of_lossy("pattern").unwrap();
-    let regex = match Regex::new(&pattern) {
-        Ok(re) => re,
-        Err(err) => return Err(format!("Invalid pattern \"{}\"", pattern).into()),
-    };
+    let pattern = RegexBuilder::new(&pattern)
+        .case_insensitive(matches.is_present("insensitive"))
+        .build()
+        .map_err(|_| format!("Invalid pattern \"{}\"", pattern))?;
 
     Ok(Config {
-        pattern: regex,
+        pattern: pattern,
         files: matches.values_of_lossy("files").unwrap(),
         recursive: matches.is_present("recursive"),
         count: matches.is_present("count"),
