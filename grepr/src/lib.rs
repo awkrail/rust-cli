@@ -67,7 +67,58 @@ pub fn get_args() -> MyResult<Config> {
 
 }
 
+fn find_files(paths: &[String], recursive: bool) -> Vec<MyResult<String>> {
+    unimplemented!();
+}
+
 pub fn run(config: Config) -> MyResult<()> {
     println!("{:#?}", config);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::find_files;
+    use rand::{distributions::Alphanumeric, Rng};
+
+    #[test]
+    fn test_find_files() {
+        let files = find_files(&["./test/inputs/fox.txt".to_string()], false);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].as_ref().unwrap(), "./tests/inputs/fox.txt");
+
+        // recursive
+
+
+
+
+
+
+
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+}
+
+
